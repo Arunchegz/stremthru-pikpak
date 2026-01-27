@@ -49,11 +49,10 @@ func NewStoreClient(config *StoreClientConfig) *StoreClient {
 	})
 	c.Name = store.StoreNamePikPak
 
-	// ⬇️ Reduced cache lifetime for near-instant updates
 	c.listMagnetsCache = func() cache.Cache[[]store.ListMagnetsDataItem] {
 		return cache.NewCache[[]store.ListMagnetsDataItem](&cache.CacheConfig{
 			Name:     "store:pikpak:listMagnets",
-			Lifetime: 10 * time.Second,
+			Lifetime: 5 * time.Minute,
 		})
 	}()
 
@@ -127,9 +126,7 @@ func (s *StoreClient) getFileByMagnetHash(ctx Ctx, hash string) (*File, error) {
 		ParentId: myPackFolder.Id,
 		Filters: map[string]map[string]any{
 			"trashed": {"eq": false},
-			"phase": {
-				"in": FilePhaseRunning + "," + FilePhaseComplete,
-			},
+			"phase":   {"eq": FilePhaseComplete},
 		},
 	})
 	if err != nil {
@@ -160,13 +157,13 @@ func (s *StoreClient) AddMagnet(params *store.AddMagnetParams) (*store.AddMagnet
 	}
 
 	data := &store.AddMagnetData{
-		Hash:     magnet.Hash,
-		Magnet:   magnet.Link,
-		Name:     "",
-		Size:     -1,
-		Status:   store.MagnetStatusQueued,
-		Files:    []store.MagnetFile{},
-		AddedAt:  time.Now(),
+		Hash:    magnet.Hash,
+		Magnet: magnet.Link,
+		Name:   "",
+		Size:   -1,
+		Status: store.MagnetStatusQueued,
+		Files:  []store.MagnetFile{},
+		AddedAt: time.Now(),
 	}
 
 	if file != nil {
@@ -196,15 +193,12 @@ func (s *StoreClient) AddMagnet(params *store.AddMagnetParams) (*store.AddMagnet
 		return nil, err
 	}
 
-	// Clear cache immediately (new task added)
 	s.listMagnetsCache.Remove(s.getCacheKey(ctx, ""))
 
 	data.Id = res.Data.Task.FileId
 	if task, _ := s.waitForTaskComplete(ctx, res.Data.Task.Id, 3, 5*time.Second); task != nil {
+		// ignore log dependency to avoid build errors
 		if task.Phase == FilePhaseComplete {
-			// Clear cache again when file is really ready
-			s.listMagnetsCache.Remove(s.getCacheKey(ctx, ""))
-
 			mRes, err := s.GetMagnet(&store.GetMagnetParams{
 				Ctx: ctx.Ctx,
 				Id:  data.Id,
@@ -328,9 +322,7 @@ func (c *StoreClient) listFilesFlat(
 		ParentId: folderId,
 		Filters: map[string]map[string]any{
 			"trashed": {"eq": false},
-			"phase": {
-				"in": FilePhaseRunning + "," + FilePhaseComplete,
-			},
+			"phase":   {"eq": FilePhaseComplete},
 		},
 	}
 	lfRes, err := c.client.ListFiles(params)
@@ -399,12 +391,8 @@ func (s *StoreClient) GetMagnet(params *store.GetMagnetParams) (*store.GetMagnet
 		AddedAt: addedAt,
 	}
 
-	// Show files even while running
-	if res.Data.Phase == FilePhaseRunning || res.Data.Phase == FilePhaseComplete {
-		if res.Data.Phase == FilePhaseComplete {
-			data.Status = store.MagnetStatusDownloaded
-		}
-
+	if res.Data.Phase == FilePhaseComplete {
+		data.Status = store.MagnetStatusDownloaded
 		if res.Data.Kind == FileKindFolder {
 			files, err := s.listFilesFlat(ctx, data.Id, nil, nil, data.Id)
 			if err != nil {
@@ -460,9 +448,7 @@ func (s *StoreClient) getMyPackFolder(ctx Ctx) (*File, error) {
 		Ctx: ctx,
 		Filters: map[string]map[string]any{
 			"trashed": {"eq": false},
-			"phase": {
-				"in": FilePhaseRunning + "," + FilePhaseComplete,
-			},
+			"phase":   {"eq": FilePhaseComplete},
 		},
 	})
 	if err != nil {
@@ -497,9 +483,7 @@ func (s *StoreClient) ListMagnets(params *store.ListMagnetsParams) (*store.ListM
 				ParentId: myPackFolder.Id,
 				Filters: map[string]map[string]any{
 					"trashed": {"eq": false},
-					"phase": {
-						"in": FilePhaseRunning + "," + FilePhaseComplete,
-					},
+					"phase":   {"eq": FilePhaseComplete},
 				},
 				PageToken: pageToken,
 			})
@@ -523,17 +507,12 @@ func (s *StoreClient) ListMagnets(params *store.ListMagnetsParams) (*store.ListM
 					}
 				}
 
-				status := store.MagnetStatusDownloading
-				if f.Phase == FilePhaseComplete {
-					status = store.MagnetStatusDownloaded
-				}
-
 				item := store.ListMagnetsDataItem{
 					Id:      f.Id,
 					Name:    f.Name,
 					Hash:    hash,
 					Size:    toSize(f.Size),
-					Status:  status,
+					Status:  store.MagnetStatusDownloaded,
 					AddedAt: addedAt,
 				}
 
@@ -577,7 +556,6 @@ func (s *StoreClient) RemoveMagnet(params *store.RemoveMagnetParams) (*store.Rem
 		return nil, err
 	}
 
-	// Force refresh after delete
 	s.listMagnetsCache.Remove(s.getCacheKey(ctx, ""))
 
 	data := &store.RemoveMagnetData{
