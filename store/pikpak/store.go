@@ -52,7 +52,7 @@ func NewStoreClient(config *StoreClientConfig) *StoreClient {
 	c.listMagnetsCache = func() cache.Cache[[]store.ListMagnetsDataItem] {
 		return cache.NewCache[[]store.ListMagnetsDataItem](&cache.CacheConfig{
 			Name:     "store:pikpak:listMagnets",
-			Lifetime: 5 * time.Minute,
+			Lifetime: 5 * time.Second,
 		})
 	}()
 
